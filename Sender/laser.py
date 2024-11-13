@@ -1,32 +1,79 @@
-import bluetooth
-import struct
-import time
-import ubinascii
 import machine
+import time
 
-class BluetoothBeacon:
-    def __init__(self, name, interval_ms=500):
-        self.ble = bluetooth.BLE()
-        self.ble.active(True)
-        self.name = name
-        self.interval_ms = interval_ms
+class LaserSensor:
+    # Laser sensor command definitions
+    CMD_OPEN_LASER = bytes([0x80, 0x06, 0x05, 0x01, 0x74])    # Open laser
+    CMD_CLOSE_LASER = bytes([0x80, 0x06, 0x05, 0x00, 0x75])   # Close laser
+    CMD_GET_SINGLE = bytes([0x80, 0x06, 0x02, 0x78])          # Single measurement
+    CMD_RANGE_10M = bytes([0xFA, 0x04, 0x09, 0x0A, 0xEF])     # Set range to 10m
+    CMD_RANGE_80M = bytes([0xFA, 0x04, 0x09, 0x50, 0xA9])     # Set range to 80m
+    CMD_RESOLUTION_1MM = bytes([0xFA, 0x04, 0x0C, 0x01, 0xF5]) # Set resolution to 1mm
+    CMD_READ_CACHE = bytes([0x80, 0x06, 0x07, 0x73])          # Read cache
 
-    def encode_adv_payload(self, sensor_data):
-        name_bytes = self.name.encode('utf-8')
-        name_length = len(name_bytes)
-        data_bytes = sensor_data.encode('utf-8')
-        data_length = len(data_bytes)
-        payload = (
-            struct.pack('BB', name_length + 1, 0x09) + name_bytes +  # 0x09 indicates complete local name
-            struct.pack('BB', data_length + 1, 0xFF) + data_bytes    # 0xFF indicates manufacturer specific data
-        )
-        return payload
+    def __init__(self, uart_id=None, baudrate=9600, tx_pin=None, rx_pin=None):
+        # Initialize the serial connection to the sensor
+        if uart_id is None or tx_pin is None or rx_pin is None:
+            raise ValueError("uart id, TX and RX pins must be specified.")
+        self.uart = machine.UART(uart_id, baudrate=baudrate, tx=tx_pin, rx=rx_pin)
 
-    def advertise(self, sensor_data):
-        payload = self.encode_adv_payload(sensor_data)
-        self.ble.gap_advertise(self.interval_ms, adv_data=payload)
-        print("Advertising as:", self.name, "and data:", sensor_data)
+    def configure_sensor(self):
+        """Initialize and configure the sensor settings."""
+        
+        # Set resolution to 1mm
+        print("Setting resolution to 1mm...")
+        self.uart.write(self.CMD_RESOLUTION_1MM)
+        time.sleep(0.5)
 
-    def stop_advertising(self):
-        self.ble.gap_advertise(None)
-        print("Stopped advertising")
+        # Set range to 10m
+        print("Setting range to 10m...")
+        self.uart.write(self.CMD_RANGE_10M)
+        time.sleep(2)
+
+        self.uart.read()
+
+    def read_once(self):
+        """Turn laser on, read one measurement and turn laser off"""
+        
+        print("Turning on the laser...")
+        self.uart.write(self.CMD_OPEN_LASER)
+        time.sleep(0.3)
+        
+        print("Sending distance measurement command.")
+        self.uart.write(self.CMD_GET_SINGLE)
+        time.sleep(0.7)
+        dist_raw = self.uart.read(60)
+        
+        print("Turning off the laser...")
+        self.uart.write(self.CMD_CLOSE_LASER)
+        time.sleep(0.1)
+        
+        return dist_raw
+        
+    def get_distance(self):
+        """Send the single measurement command and read distance data."""
+
+        try:
+            dist_raw = self.read_once()
+            # flush the cache
+            self.uart.read()
+            if dist_raw:
+                print("Raw Data:", dist_raw)
+                dist = ""
+
+                # Iterate through each byte and filter out non-ASCII characters
+                for byte in dist_raw:
+                    if 48 <= byte <= 57 or byte == 46:  # ASCII for '0'-'9' and '.'
+                        dist += chr(byte)
+
+                return dist
+            else:
+                print("No data received.")
+                # flush the cache
+                self.uart.read()
+                return None
+        except Exception as e:
+            print("Error reading data:", e)
+            # flush the cache
+            self.uart.read()
+            return None
