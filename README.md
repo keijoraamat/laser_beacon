@@ -4,6 +4,6 @@ The Laser Beacon is a Python project of location sensor implemented on 2 laser s
 
 ## Getting started
 
-The beacon part is written for Micropython. Easiest way to get started is installing probably Thonny [https://thonny.org/](https://thonny.org/)
+The beacon part is written for ESP-IDF.
 
 The recieving part should run with any Python 3 interpretator. Only one pacage, Bleak [https://pypi.org/project/bleak/](https://pypi.org/project/bleak/), needs to be installed.
