@@ -1,70 +1,85 @@
 import asyncio
 from bleak import BleakScanner
+from confluent_kafka import Producer
+import binascii
+import struct
+import json
+import time
 
-TARGET_BEACON_NAME = "LBcn"
 
-def parse_custom_data(advertisement_data):
-    print(f"raw data {advertisement_data}")
-    """
-    Beacon Found: LBcn (D8:3B:DA:11:DE:BE)
-    raw data AdvertisementData(local_name='LBcn', manufacturer_data={12336: b'0.34800:003.830', 14649: b'9.999:003.831'}, tx_power=9, rssi=-76)
-    """
-    return
-    # Access the raw bytes of the advertisement data
-    adv_bytes = advertisement_data.bytes
+BEACON_NAME = "LB"
+MANUFACTURER_DATA_TYPE = 0x02E5  # Manufacturer Specific Data (AD Type)
+BROKER_LOCATION = "192.168.0.247:9092"
 
-    # The structure is:
-    # [Length][AD Type][Data]...
+last_timestamp = None
 
-    # We need to find the AD Type 0xFF and extract the measurements
-    i = 0
-    while i < len(adv_bytes):
-        length = adv_bytes[i]
-        if length == 0:
-            break  # Reached the end of advertisement data
-        ad_type = adv_bytes[i + 1]
-        if ad_type == 0xFF:  # Manufacturer Specific Data
-            # Extract the measurement data
-            data_start = i + 2
-            data_end = data_start + (length - 1)
-            measurements_data = adv_bytes[data_start:data_end]
 
-            if len(measurements_data) >= 4:
-                # Parse the measurements
-                measurement_0 = int.from_bytes(measurements_data[0:2], byteorder='little')
-                measurement_1 = int.from_bytes(measurements_data[2:4], byteorder='little')
-                print(f"Measurement 0: {measurement_0}")
-                print(f"Measurement 1: {measurement_1}")
-            else:
-                print("Measurement data too short.")
-            break  # Exit after finding the custom data
-        else:
-            # Move to the next AD structure
-            i += length + 1  # Length byte + length of data
-    else:
-        print("Custom data not found in advertisement.")
+class KafkaHandler:
+    def __init__(self, broker, topic):
+        self.producer = Producer({
+            'bootstrap.servers': broker
+        })
+        self.topic = topic
 
-def detection_callback(device, advertisement_data):
-    if advertisement_data.local_name == TARGET_BEACON_NAME:
-        print(f"Beacon Found: {device.name} ({device.address})")
-        #print(f"ad data: {advertisement_data}")
-        #return
-        # Parse custom data from the advertisement
-        parse_custom_data(advertisement_data)
+    def send_data(self, data):
+        try:
+            self.producer.produce(self.topic, value=json.dumps(data).encode('utf-8'))
+            self.producer.flush()
+        except Exception as e:
+            print(f"Failed to send data to Kafka: {e}")
 
-async def scan_and_listen():
-    print("Scanning for BLE devices...")
+kafka_handler = KafkaHandler(broker=BROKER_LOCATION, topic="beacon_data")
 
-    # Pass the detection_callback directly to the BleakScanner constructor
-    scanner = BleakScanner(detection_callback=detection_callback)
+
+async def beacon_callback(device, advertisement_data):
+    global last_timestamp
+
+    if advertisement_data.local_name == BEACON_NAME:
+
+        #print(f"ad_data: {advertisement_data}")
+        #for key, value in advertisement_data.manufacturer_data.items():
+        #    print(f"Manufacturer data key: {hex(key)}, value: {binascii.hexlify(value)}")
+        manufacturer_data = next(iter(advertisement_data.manufacturer_data.values()), None)
+
+        if manufacturer_data:
+            # Add leading two zero bytes
+            if len(manufacturer_data) == 10:
+                manufacturer_data = b'\x00\x00' + manufacturer_data
+            #print(f"Raw Manufacturer_data (hex): {binascii.hexlify(manufacturer_data)}")
+            # Extract the data from the advertisement
+            try:
+                timestamp, number1, number2 = struct.unpack(
+                    '>I3s3s', manufacturer_data[:10]
+                )
+                number1 = int.from_bytes(number1, byteorder='big') / 1000.0
+                number2 = int.from_bytes(number2, byteorder='big') / 1000.0
+
+                if last_timestamp is None or timestamp != last_timestamp:
+                    last_timestamp = timestamp
+                    local_timestamp = int(time.time())
+
+                    data = {
+                        "ts": local_timestamp,
+                        "x": number1,
+                        "y": number2
+                    }
+
+                    kafka_handler.send_data(data)
+
+            except struct.error as e:
+                print(f"Failed to unpack manufacturer data: {e}")
+
+async def scan_beacon():
+    scanner = BleakScanner()
+    scanner.register_detection_callback(beacon_callback)
+    print("Scanning for BLE beacons...")
     await scanner.start()
-
     try:
         while True:
-            await asyncio.sleep(0.2)  # Keep the scan running
-    except KeyboardInterrupt:
-        print("Stopping scan...")
+            await asyncio.sleep(1)
+    except asyncio.CancelledError:
+        print("Stopping scanner...")
         await scanner.stop()
 
 if __name__ == "__main__":
-    asyncio.run(scan_and_listen())
+    asyncio.run(scan_beacon())
