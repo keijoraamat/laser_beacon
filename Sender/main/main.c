@@ -9,6 +9,9 @@
 #include "esp_system.h"
 #include "driver/uart.h"
 
+#include "driver/gpio.h"
+
+
 #include "common.h"
 #include "gap.h"
 
@@ -21,6 +24,7 @@
 #define UART1_RX_PIN        (0)
 #define UART_BAUD_RATE     9600
 #define UART_BUF_SIZE      1024
+#define LED_GPIO             10
 
 #define LTAG "LSR"
 
@@ -127,6 +131,8 @@ void get_distance(char *distance_measurement_1, char *distance_measurement_0)
     int len_0;
     int len_1;
 
+    gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+
     ESP_LOGI(LTAG, "Sending distance measurement command.\n");
     //uart_write_bytes(UART_PORT, (const char*)CMD_GET_SINGLE, sizeof(CMD_GET_SINGLE));
     uart_write_bytes(UART_PORT_0, (const char*)CMD_GET_SINGLE, sizeof(CMD_GET_SINGLE));
@@ -161,11 +167,25 @@ void get_distance(char *distance_measurement_1, char *distance_measurement_0)
         }
         distance_measurement_1[idx_1] = '\0';
 
+        // turn LED on for 200ms.
+        gpio_set_level(LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(200));
+        gpio_set_level(LED_GPIO, 0);
+
         printf("Distance: X:%s-Y:%s \n", distance_measurement_0, distance_measurement_1);
 
     } else {
         printf("Failed to read distance.\n");
         ESP_LOGE(LTAG, "Reading failed, got %i bytes from long and %i bytes from short", len_0, len_1);
+        // turn LED on for 20ms, 150ms pause, 20ms on.
+        gpio_set_level(LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        gpio_set_level(LED_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(150));
+        gpio_set_level(LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        gpio_set_level(LED_GPIO, 0);
+        
         /* clear lasers chaches */
         uint8_t dist_raw_a[40];
         uint8_t dist_raw_b[40];
