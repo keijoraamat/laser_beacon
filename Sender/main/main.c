@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include "esp_system.h"
 #include "driver/uart.h"
+#include "esp_bt.h"
 
 #include "driver/gpio.h"
 
@@ -334,6 +335,15 @@ static void on_stack_reset(int reason) {
 }
 
 static void on_stack_sync(void) {
+    /* Set TX power to max */
+    esp_err_t ret = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P9);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to set TX power: %d", ret);
+    } else {
+        ESP_LOGI(TAG, "TX power st to maximum (+9 dBm)");
+    }
+    
     /* On stack sync, do advertising initialization */
     adv_init();
 }
